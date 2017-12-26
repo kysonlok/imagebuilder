@@ -10,7 +10,9 @@ free to install or remove some packages from firmware.
 
 ### Installation  
 
+```bash  
 $ git clone https://github.com/kysonlok/imagebuilder.git  
+```  
 
 ### Configuration  
 
