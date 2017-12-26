@@ -1,0 +1,448 @@
+#!/usr/bin/env python
+
+import os
+import re
+import sys
+import logging
+import subprocess
+from subprocess import PIPE
+from subprocess import Popen
+from subprocess import STDOUT
+from subprocess import CalledProcessError
+import ConfigParser
+
+from util import run_shell
+
+class ParseConfig:
+    def __init__(self, config):
+        self.config = config
+        self.__repo = dict()
+        self.__general = dict()
+        self.__profiles = []
+        self.__image = dict()
+        self.__packagesUrl = dict()
+        self.__packagesInstall = dict()
+        self.__packagesUninstall = dict()
+
+    def getRepo(self):
+        return self.__repo
+
+    def getSourceDir(self):
+        if self.__general.has_key('sourcedir') \
+                and os.path.isdir(self.__general['sourcedir']):
+            return os.path.abspath(self.__general['sourcedir'])
+        else:
+            return os.path.abspath('./source')
+
+    def getDlDir(self):
+        return self.__general['dl']
+
+    def getVersion(self):
+        return self.__general['version']
+
+    def getProfiles(self):
+        # Profiles
+        if self.__image.has_key('profiles'):
+            self.__profiles = self.__image['profiles'].split()
+
+        return self.__profiles
+
+    def getTarget(self):
+        ta = self.__general['target'].split("_")
+        return ta
+
+    def getPackagesUrl(self):
+        return self.__packagesUrl
+
+    def getPackagesUnistall(self):
+        return self.__packagesUninstall
+
+    def getPackagesInstall(self):
+        return self.__packagesInstall
+
+    def __populatedPackage(self):
+        # Install packages
+        if self.__image.has_key('install'):
+            install = self.__image['install'].split()
+            self.__packagesInstall.setdefault('common', []).extend(install)
+
+        # Uninstall packages
+        if self.__image.has_key('uninstall'):
+            uninstall = self.__image['uninstall'].split()
+            self.__packagesUninstall.setdefault('common', []).extend(uninstall)
+
+    def dumpParsing(self):
+        # Clear various
+        self.__repo = dict()
+        self.__general = dict()
+        self.__profiles = []
+        self.__image = dict()
+        self.__packagesUrl = dict()
+        self.__packagesInstall = dict()
+        self.__packagesUninstall = dict()
+
+        ini = ConfigParser.ConfigParser()
+        ini.read(self.config)
+
+        for section in ini.sections():
+            if section == "general":
+                if ini.has_option(section, "dl"):
+                    self.__general['dl'] = ini.get(section, "dl")
+                else:
+                    self.__general['dl'] = '$HOME/dl'
+
+                if ini.has_option(section, "sourcedir"):
+                    self.__general['sourcedir'] = ini.get(section, "sourcedir")
+                self.__general['version'] = ini.get(section, "version")
+                self.__general['target'] = ini.get(section, "target")
+            elif section == "repo":
+                self.__repo['url'] = ini.get(section, "url")
+                if ini.has_option(section, "branch"):
+                    self.__repo['branch'] = ini.get(section, "branch")
+                else:
+                    self.__repo['branch'] = "master"
+            elif section.startswith("image "):
+                if section.split()[1] == self.__general['target']:
+                    for option in ini.options(section):
+                        self.__image[option] = ini.get(section, option)
+            elif section.startswith("packages "):
+                profiles = self.getProfiles()
+
+                if section.split()[1] == "common":
+                    for option in ini.options(section):
+                        self.__packagesUrl[option] = ini.get(section, option)
+                        self.__packagesInstall.setdefault('common', []).append(option)
+                elif (len(profiles) != 0) and (section.split()[1] in profiles):
+                    for option in ini.options(section):
+                        if option == "uninstall":
+                            self.__packagesUninstall[section.split()[1]] = ini.get(section, option).split()
+                        elif option == "install":
+                            for o in ini.get(section, option).split():
+                                self.__packagesInstall.setdefault(section.split()[1], []).append(o)
+                        else:
+                            self.__packagesInstall.setdefault(section.split()[1], []).append(option)
+                            self.__packagesUrl[option] = ini.get(section, option)
+
+        # Populate members
+        self.__populatedPackage()
+
+
+def dump_packages(path, packages):
+    ipk_install = dict()
+    ipk_symbol = []
+
+    for package in packages.keys():
+        f = open(path, 'r')
+        if f is not None:
+            for line in f:
+                package_meta = re.match("^package-\$\((.+)\)\s*[.+]\s*(.+)", line)
+
+                if package_meta:
+                    pkg_name = re.match("^CONFIG_PACKAGE_(.+)", package_meta.group(1))
+                    pkg_dir = re.match("^(.+)\/(.+)", package_meta.group(2))
+            
+                    if pkg_name and pkg_dir:
+                        if pkg_dir.group(2) in packages.get(package):
+                            ipk_install.setdefault(package, []).append(pkg_name.group(1))
+                            ipk_symbol.append(package_meta.group(1))
+                        elif pkg_name.group(1) in packages.get(package):
+                            ipk_install.setdefault(package, []).append(pkg_name.group(1))
+                            ipk_symbol.append(package_meta.group(1))
+            f.close()
+
+    return (ipk_install, ipk_symbol)
+
+def get_num_jobs():
+    try:
+        p = Popen(['nproc'], stdout = PIPE, stderr = STDOUT)
+        (stdoutdata, stderrdata) = p.communicate()
+        return (int(stdoutdata.strip()) + 1)
+    except:
+        return 1
+
+def shell_command(command, cwd = os.getcwd()):
+    logging.info("Running command: %s" % command)
+
+    try:
+        proc = Popen(
+            command,
+            stdout=PIPE,
+            stderr=STDOUT,
+            cwd=cwd,
+            shell=True
+        )
+
+        while proc.poll() is None:
+	    for line in iter(proc.stdout.readline,''):
+                logging.info(line.rstrip())
+
+    except (OSError, CalledProcessError) as exception:
+        logging.error('Failed to execute "%s"' % command)
+        return False
+    else:
+        if proc.returncode == 0:
+            logging.info('Success to execute "%s"' % command)
+            return True
+        else:
+            logging.error('Failed to execute "%s"' % command)
+            return False
+
+    return True
+
+def main():
+    # logging.basicConfig(format = '%(levelname)s: %(message)s', level = logging.INFO)
+    logging.basicConfig(format = '%(levelname)s: %(message)s')
+
+    # Parse config
+    c = ParseConfig('./config.ini')
+    c.dumpParsing()
+
+    home_dir = os.path.abspath('.')
+
+    # Get config
+    source_dir = c.getSourceDir()
+
+    version = c.getVersion()
+    (board, subtarget) = c.getTarget()
+    dl = c.getDlDir()
+
+    repo = c.getRepo()
+    repo_url = repo['url']
+    repo_branch = repo['branch']
+
+    profiles = c.getProfiles()
+
+    packages_url = c.getPackagesUrl()
+    packages_install = c.getPackagesInstall()
+    packages_uninstall = c.getPackagesUnistall()
+
+    # Update source
+    logging.info("Update buildroot from %s", source_dir)
+    if not os.path.isdir(source_dir+'/.git'):
+        if os.path.isdir(source_dir):
+            shell_command("rm -fr %s" % source_dir)
+
+        shell_command("git clone --depth=1 --branch=%s %s %s" % (repo_branch, repo_url, source_dir))
+    else:
+        shell_command("git pull", cwd = source_dir)
+
+    # Removing files
+    shell_command("rm -fr files/", cwd = source_dir)
+
+    # Removing log
+    shell_command("rm -fr buildlogs/", cwd = source_dir)
+
+    # Remove tmp directory
+    shell_command("rm -fr tmp/", cwd = source_dir)
+
+    # Update packages
+    isupdate = False
+    if isupdate:
+        for k, v in packages_url.items():
+            shell_command("%s/scripts/updatepkg.pl %s %s" \
+                    % (home_dir, k, v), \
+                    cwd = source_dir)
+
+    # Update feeds
+    shell_command("rm -fr package/feeds/", cwd = source_dir)
+
+    run_shell(
+            name = "updatefeeds",
+            description = "Updating feeds",
+            command = ["./scripts/feeds", "update"],
+            cwd = source_dir
+    )
+
+    run_shell(
+            name = "installfeeds",
+            description = "Installing feeds",
+            command = ["./scripts/feeds", "install", "-a"],
+            cwd = source_dir
+    )
+
+    run_shell(
+            name = "installfeeds",
+            description = "Installing prefer feed(gli_pub)",
+            command = ["./scripts/feeds", "install", "-p", "gli_pub", "-a", "-f", "-o"],
+            cwd = source_dir
+    )
+
+    # Prepare packages info
+    if not shell_command("make prepare-tmpinfo", cwd = source_dir):
+        sys.exit(1)
+
+    # Dump packages
+    (ipk_install, ipk_symbol) = dump_packages(source_dir+'/tmp/.packagedeps', packages_install)
+
+    # Prepare .config
+    if not shell_command("cp %s/config.seed.core .config" % home_dir, cwd = source_dir):
+        sys.exit(1)
+
+    for s in ipk_symbol:
+        subprocess.call("printf '%s=m\n' >> .config" % s, cwd = home_dir+'/source', shell = True)
+
+    subprocess.call("printf 'CONFIG_TARGET_%s=y\n' >> .config" \
+            % board, cwd = source_dir, shell = True)
+    subprocess.call("printf 'CONFIG_TARGET_%s_%s=y\n' >> .config" \
+            % (board, subtarget), cwd = source_dir, shell = True)
+
+    findprofiles = Popen([home_dir+'/scripts/profiles.sh', board, subtarget, 
+        "gl-"], stdout = PIPE, cwd = source_dir)
+    while True:
+        line = findprofiles.stdout.readline()
+        if not line:
+            break
+        subprocess.call("printf 'CONFIG_TARGET_DEVICE_%s_%s_DEVICE_%s=y\n' >> .config" \
+                % (board, subtarget, line.rstrip()), cwd = source_dir, shell = True)
+
+    # Removing output directory
+    shell_command("rm -fr bin/", cwd = source_dir)
+
+    # Populating .config
+    if not shell_command("make defconfig", cwd = source_dir):
+        sys.exit(1)
+
+    # Prepare ccache
+    shell_command("%s/scripts/ccache.sh" % home_dir, cwd = source_dir)
+
+    # Install build key
+    if not shell_command("cp %s/keys/key-build key-build" % home_dir, cwd = source_dir):
+        sys.exit(1)
+    if not shell_command("cp %s/keys/key-build.pub key-build.pub" % home_dir, cwd = source_dir):
+        sys.exit(1)
+
+    # Prepare dl
+    shell_command("mkdir -p %s && rm -rf ./dl && ln -sf %s ./dl" % (dl, dl), cwd = source_dir)
+
+    # Prepare files
+    shell_command("make -f %s/files.mk VERSION=%s" % (home_dir, version), cwd = source_dir)
+
+    # Building GNU tar 
+    run_shell(
+            name = "dltar",
+            description = "Building GNU tar",
+            command = ["make", "-j%d" % get_num_jobs(), "tools/tar/install", "V=s"],
+            cwd = source_dir
+    )
+
+    # Populate dl
+    run_shell(
+            name = "dlrun",
+            description = "Populating dl/",
+            command = ["make", "-j%d" % get_num_jobs(), "download", "V=s"],
+            cwd = source_dir
+    )
+
+    # Cleaning base-files
+    run_shell(
+            name = "cleanbase",
+            description = "Cleaning base-files",
+            command = ["make", "package/base-files/clean", "V=s"],
+            cwd = source_dir
+    )
+
+    # Building tools
+    run_shell(
+            name = "tools",
+            description = "Building tools",
+            command = ["make", "-j%d" % get_num_jobs(), "tools/install", "V=s"],
+            cwd = source_dir
+    )
+
+    # Building toolchain
+    run_shell(
+            name = "toolchain",
+            description = "Building toolchain",
+            command = ["make", "-j%d" % get_num_jobs(), "toolchain/install", "V=s"],
+            cwd = source_dir
+    )
+
+    # Building kmods
+    run_shell(
+            name = "kmods",
+            description = "Building kmods",
+            command = ["make", "-j%d" % get_num_jobs(), "target/compile", "IGNORE_ERRORS=n m", "BUILD_LOG=1"],
+            cwd = source_dir
+    )
+
+    # Cleaning up package build
+    run_shell(
+            name = "pkgclean",
+            description = "Cleaning up package build",
+            command = ["make", "package/cleanup", "V=s"],
+            cwd = source_dir
+    )
+
+    # Building packages
+    run_shell(
+            name = "pkgbuild",
+            description = "Building packages",
+            command = ["make", "-j%d" % get_num_jobs(), "package/compile", "IGNORE_ERRORS=y n m", "BUILD_LOG=1"],
+            cwd = source_dir
+    )
+
+    # Installing rootfs
+    ipk_install_common = " ".join(ipk_install.get('common', []))
+    ipk_remove_common = " ".join(packages_uninstall.get('common', []))
+    run_shell(
+            name = "pkginstall",
+            description = "Installing packages",
+            command = ["make", "-j%d" % get_num_jobs(), "package/install", \
+                    "PACKAGES=%s" % ipk_install_common, \
+                    "PACKAGES_REMOVE=%s" % ipk_remove_common, \
+                    "V=s"],
+            cwd = source_dir
+    )
+
+    # Indexing packages
+    run_shell(
+            name = "pkgindex",
+            description = "Indexing packages",
+            command = ["make", "-j%d" % get_num_jobs(), "package/index", "V=s"],
+            cwd = source_dir
+    )
+
+    # Building images
+    run_shell(
+            name = "images",
+            description = "Building images",
+            command = ["make", "-j%d" % get_num_jobs(), "target/install", "V=s"],
+            cwd = source_dir
+    )
+
+    # Remake specified target rootfs
+    for profile in profiles:
+        ipk_install_profile = " ".join(ipk_install.get(profile, []))
+        ipk_remove_profile = " ".join(packages_uninstall.get(profile, []))
+        if len(ipk_install_profile) == 0 and len(ipk_remove_profile) == 0:
+            continue
+
+        run_shell(
+                name = "images",
+                description = "Building images for %s" % profile,
+                command = [home_dir+"/scripts/imagebuilder.sh", \
+                        "-b", board, \
+                        "-p", profile, \
+                        "-i", "%s %s" % (ipk_install_common, ipk_install_profile), \
+                        "-r", "%s %s" % (ipk_remove_common, ipk_remove_profile)],
+                cwd = source_dir
+        )
+
+    # Generating config.seed
+    run_shell(
+            name = "diffconfig",
+            description = "Generating config.seed",
+            command = ["make", "-j1", "diffconfig", "V=s"],
+            cwd = source_dir
+    )
+
+    # Calculating checksums
+    run_shell(
+            name = "checksums",
+            description = "Calculating checksums",
+            command = ["make", "-j1", "checksum", "V=s"],
+            cwd = source_dir
+    )
+
+if __name__ == '__main__':
+    main()

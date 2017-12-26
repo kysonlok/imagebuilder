@@ -1,0 +1,20 @@
+[general]
+dl = ~/dl
+# sourcedir = ./source
+target = ar71xx_generic
+version = 2.27
+
+[repo]
+url = https://github.com/gl-inet/lede-17.01
+branch = lede-17.01
+
+[image ar71xx_generic]
+profiles = example_board
+install = luci libiwinfo
+
+[packages common]
+example = git@gitlab.com:example/example.git
+
+[packages example_board]
+install =  kmod-ath10k
+uninstall = uhttpd
