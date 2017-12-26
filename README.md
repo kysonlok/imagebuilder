@@ -34,4 +34,32 @@ You can modify configuration file for your requirement.
 | url | buildroot git repo | https://github.com/gl-inet/lede-17.01 |
 | branch | buildroot git repo branch | lede-17.01 |  
 
+**image xxx**  
+
+| key  | description | default |
+| :---: | :---: | :---: |
+| profiles | specified target to re-make image with proprietary packages | None |  
+| install | install specified packages to rootfs | None |  
+| uninstall | remove specified packages from rootfs | None |  
+
+**packages common**  
+
+Common property means the definition packages will install proprietary packages 
+to rootfs for all target.  
+
+| key  | value | default |
+| :---: | :---: | :---: |  
+| package name | packages git repo | None |  
+
+**packages xxx**  
+
+'xxx' property means the definition packages for specified board, it can install 
+property packages with 'package name = url' format, or install specified package 
+with name for xxx board.  
+
+| key  | value | default |
+| :---: | :---: | :---: |
+| package name | specified target to re-make image with proprietary packages | None |  
+| install | install specified packages to rootfs | None |  
+| uninstall | remove specified packages from rootfs | None |  
 
