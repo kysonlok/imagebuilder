@@ -18,19 +18,19 @@ $ cp config.ini.example config.ini
 
 You can modify configuration file for your requirement.  
 
-general  
+**general**  
 
 | key  | description | default |
-| --- | --- | --- |
+| :---: | :---: | :---: |
 | dl | packages download path | ~/dl |
 | sourcedir | OpenWrt/LEDE buildroot source path | ./source |
 | target | target to build | ar71xx_generic |
 | version | firmware version | 2.27 |  
 
-repo  
+**repo**  
 
 | key  | description | default |
-| --- | --- | --- |
+| :---: | :---: | :---: |
 | url | buildroot git repo | https://github.com/gl-inet/lede-17.01 |
 | branch | buildroot git repo branch | lede-17.01 |  
 
