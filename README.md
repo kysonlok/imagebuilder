@@ -14,7 +14,9 @@ $ git clone https://github.com/kysonlok/imagebuilder.git
 
 ### Configuration  
 
+```bash  
 $ cp config.ini.example config.ini  
+```  
 
 You can modify configuration file for your requirement.  
 
@@ -62,4 +64,10 @@ with name for xxx board.
 | package name | specified target to re-make image with proprietary packages | None |  
 | install | install specified packages to rootfs | None |  
 | uninstall | remove specified packages from rootfs | None |  
+
+### Building Image  
+
+```bash  
+$ ./op_image --release
+```  
 
